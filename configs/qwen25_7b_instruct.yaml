@@ -1,0 +1,26 @@
+# Step 1-2: Reproduce AgentFlow with Qwen-2.5-7B-Instruct
+# Planner runs on Modal A10G via vLLM; fixed engine on Together AI
+
+planner_engine: "vllm-Qwen/Qwen2.5-7B-Instruct"
+fixed_engine: "together-Qwen/Qwen2.5-7B-Instruct-Turbo"
+gpu: "A10G"
+max_model_len: 8192
+gpu_memory_utilization: 0.90
+estimated_cost_per_hour: 1.10
+
+benchmarks:
+  - bamboogle
+  - twowiki
+  - hotpotqa
+  - musique
+  - gaia
+
+tools:
+  - Wikipedia_Search_Tool
+  - Google_Search_Tool
+  - Python_Coder_Tool
+  - Base_Generator_Tool
+
+max_steps: 10
+max_time: 300
+temperature: 0.0

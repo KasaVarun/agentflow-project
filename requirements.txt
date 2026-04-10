@@ -1,0 +1,46 @@
+# Core AgentFlow dependencies
+openai>=1.50.0
+together>=1.0.0
+tenacity>=9.0.0
+diskcache>=5.6.0
+platformdirs>=4.0.0
+Pillow>=10.0.0
+pydantic>=2.0.0
+requests>=2.31.0
+aiohttp>=3.9.0
+httpx>=0.27.0
+
+# Tools
+beautifulsoup4>=4.12.0
+wikipedia>=1.4.0
+google-api-python-client>=2.100.0
+
+# Benchmarks / data
+datasets>=3.0.0
+tqdm>=4.65.0
+
+# Modal deployment
+modal>=0.67.0
+
+# Training (Steps 5-6)
+torch>=2.4.0
+transformers>=4.45.0
+peft>=0.14.0
+trl>=0.12.0
+accelerate>=1.0.0
+
+# Evaluation and analysis
+numpy>=1.24.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+
+# Demo
+gradio>=5.0.0
+
+# Text-to-SQL benchmark
+sqlparse>=0.5.0
+
+# Dev / utils
+python-dotenv>=1.0.0
+psutil>=5.9.0
+PyYAML>=6.0.0
