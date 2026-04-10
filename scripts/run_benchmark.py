@@ -106,8 +106,8 @@ def run_single(solver, data, index, output_dir):
     # Save result
     os.makedirs(output_dir, exist_ok=True)
     output_file = os.path.join(output_dir, f"output_{index}.json")
-    with open(output_file, 'w') as f:
-        json.dump(result, f, indent=2)
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump(result, f, indent=2, ensure_ascii=False)
     print(f"\nSaved: {output_file}")
 
     return result
