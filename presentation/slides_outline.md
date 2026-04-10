@@ -71,19 +71,22 @@ Query → Planner → tool call → Executor → Verifier → (loop or stop)
 
 ---
 
-### Slide 7: Step 3 — Model Scaling Study
+### Slide 7: Step 3 — Model Scaling Study (Qwen3.5)
 
-| Model | Bamboogle | HotpotQA | GAIA |
-|-------|-----------|----------|------|
-| **0.5B** | 37.1% | 27.6% | 12.3% |
-| **3B** | 34.7% | 28.6% | 11.4% |
-| **7B** | **67.7%** | **49.5%** | **17.4%** |
+| Model | Bamboogle | Text2sql |
+|-------|-----------|---------|
+| **0.8B** | 36.0% | 93.6% |
+| **2B** | **49.6%** | 91.8% |
+| **4B** | **49.6%** | **94.3%** |
+| **9B** | 40.0% | 93.7% |
+| **27B** | ~31% (sample) | — |
 
-- Clear scaling benefit at 7B across all benchmarks
-- 0.5B→3B gap is surprisingly small
-- 7B is a "phase transition" — dramatically better tool-use planning
+- 2B/4B sweet spot for Bamboogle (~49.6%)
+- 9B/27B regression: larger models produce verbose markdown output that breaks tool name matching
+- Text2sql highly consistent across sizes (91-94%) — SQL accuracy doesn't scale with model size
+- 0.8B achieves highest text2sql — concise outputs match tool format better
 
-*(Chart: line graph, x=model size log scale, y=accuracy, 3 lines for benchmarks)*
+*(Chart: bar chart, x=model size, y=accuracy, two series: Bamboogle + Text2sql)*
 
 ---
 
@@ -93,9 +96,17 @@ Query → Planner → tool call → Executor → Verifier → (loop or stop)
 - New tool: **SQL_Executor_Tool** — executes SELECT queries against Spider DBs
 - Schema injected into query: `"Table singer: [Singer_ID (number), Name (text), ...]"`
 - Evaluation: execution accuracy (results match, not exact SQL string)
-- Model: Qwen2.5-7B-Instruct-Turbo via Together AI
 
-**Result: 91.01% execution accuracy (941/1034)** — competitive with SOTA on Spider dev.
+**Results across models:**
+| Model | Text2sql accuracy |
+|-------|-----------------|
+| Qwen2.5-7B (baseline) | 91.01% (941/1034) |
+| Qwen3.5-0.8B | 93.62% (968/1034) |
+| Qwen3.5-2B | 91.78% (949/1034) |
+| Qwen3.5-4B | **94.29%** (975/1034) |
+| Qwen3.5-9B | 93.71% (969/1034) |
+
+Consistent 91-94% across all model sizes — SQL execution accuracy is largely model-size independent.
 
 ---
 

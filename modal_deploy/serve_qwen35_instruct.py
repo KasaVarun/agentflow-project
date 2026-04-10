@@ -51,6 +51,7 @@ vllm_image = (
     .run_commands(
         f"python -c 'from huggingface_hub import snapshot_download; snapshot_download(\"{MODEL_NAME}\")'",
     )
+    .env({"MODEL_SIZE": MODEL_SIZE})  # bake MODEL_SIZE so serve() uses correct model at runtime
 )
 
 
