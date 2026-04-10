@@ -1,0 +1,29 @@
+# Step 5-6: Flow-GRPO + LoRA training on Qwen3.5-0.8B
+base_model: "Qwen/Qwen3.5-0.8B-Instruct"
+fixed_engine: "together-Qwen/Qwen2.5-7B-Instruct-Turbo"
+gpu: "A10G"
+estimated_cost_per_hour: 1.10
+
+lora:
+  r: 16
+  lora_alpha: 32
+  target_modules: ["q_proj", "v_proj"]
+  lora_dropout: 0.05
+  bias: "none"
+
+training:
+  group_size: 4
+  learning_rate: 1.0e-5
+  num_epochs: 3
+  batch_size: 1
+  gradient_accumulation_steps: 4
+  max_grad_norm: 0.5
+  warmup_steps: 10
+  clip_eps: 0.2
+  kl_coef: 0.01
+
+data:
+  training_mix:
+    - naturalquestions
+    - deepmath
+  max_samples: 5000

@@ -1,0 +1,6 @@
+planner_engine: "vllm-Qwen/Qwen3.5-2B-Instruct"
+fixed_engine: "together-Qwen/Qwen2.5-7B-Instruct-Turbo"
+gpu: "A10G"
+max_model_len: 8192
+gpu_memory_utilization: 0.85
+estimated_cost_per_hour: 1.10

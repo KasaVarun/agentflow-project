@@ -1,0 +1,35 @@
+# Environment
+.env
+.venv/
+__pycache__/
+*.pyc
+
+# Results and cache
+results/
+logs/
+*.log
+solver_cache/
+cache/
+
+# Reference repo (not part of our project)
+AgentFlow-reference/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model weights
+*.bin
+*.safetensors
+*.gguf
+
+# Large Spider database files (>50MB, use download script instead)
+benchmarks/text2sql/data/spider/database/soccer_1/
+benchmarks/text2sql/data/spider/database/wta_1/*.sqlite
+benchmarks/text2sql/data/spider/database/baseball_1/schema.sql
+benchmarks/text2sql/data/spider/database/baseball_1/*.sqlite
