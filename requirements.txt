@@ -37,6 +37,9 @@ matplotlib>=3.7.0
 # Demo
 gradio>=5.0.0
 
+# Presentation (python presentation/build_slides.py)
+python-pptx>=0.6.21
+
 # Text-to-SQL benchmark
 sqlparse>=0.5.0
 

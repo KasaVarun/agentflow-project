@@ -225,11 +225,31 @@ for i, row in enumerate(data3):
         bold = i==2
         col = ACCENT if (i==2 and j>0) else DARK
         txt(s, cell, x, 2.57+i*0.6, w, 0.55, size=12, bold=bold, color=col, align=PP_ALIGN.CENTER)
-txt(s, "Qwen3.5 family (Bamboogle)", 0.5, 4.15, 8.1, 0.4, size=14, bold=True, color=BLUE)
-rect(s, 0.35, 4.6, 8.3, 0.4, fill=BLUE)
-for h, x, w in zip(["Model","Bamboogle"], [0.35,1.9], [1.5,1.3]):
-    txt(s, h, x, 4.63, w, 0.35, size=11, bold=True, color=WHITE, align=PP_ALIGN.CENTER)
-txt(s, "(results pending)", 3.3, 4.65, 5.0, 0.35, size=11, color=RGBColor(0x99,0x99,0x99))
+txt(s, "Qwen3.5 family (Modal vLLM, thinking disabled)", 0.5, 4.05, 8.1, 0.38, size=13, bold=True, color=BLUE)
+h35 = ["Model", "Bamboogle", "Text2sql"]
+cx35 = [0.35, 1.75, 3.15]
+cw35 = [1.25, 1.25, 1.25]
+rect(s, 0.35, 4.42, 5.35, 0.38, fill=BLUE)
+for h, x, w in zip(h35, cx35, cw35):
+    txt(s, h, x, 4.45, w, 0.34, size=10, bold=True, color=WHITE, align=PP_ALIGN.CENTER)
+data35 = [
+    ("0.8B", "36.0%", "93.6%"),
+    ("2B", "49.6%", "91.8%"),
+    ("4B", "49.6%", "94.3%"),
+    ("9B", "40.0%", "93.7%"),
+    ("27B", "~31%", "—"),
+]
+for i, row in enumerate(data35):
+    bg = GRAY if i % 2 == 0 else WHITE
+    rect(s, 0.35, 4.8 + i * 0.34, 5.35, 0.34, fill=bg)
+    for j, (cell, x, w) in enumerate(zip(row, cx35, cw35)):
+        is_bb_peak = j == 1 and row[1] == "49.6%"
+        is_sql_peak = j == 2 and row[2] == "94.3%"
+        col = ACCENT if (is_bb_peak or is_sql_peak) else DARK
+        bold = is_bb_peak or is_sql_peak
+        txt(s, cell, x, 4.82 + i * 0.34, w, 0.32, size=10, bold=bold, color=col, align=PP_ALIGN.CENTER)
+txt(s, "*27B: sampled subset; 2B/4B sweet spot on Bamboogle; verbose 9B/27B hurts tool JSON matching.",
+    0.35, 6.55, 8.2, 0.45, size=9, color=DARK, wrap=True)
 txt(s, "Key Insights", 9.3, 1.6, 3.6, 0.4, size=14, bold=True, color=BLUE)
 for i, l in enumerate([
     "7B is a 'phase transition':\ndramatically better tool-use planning",

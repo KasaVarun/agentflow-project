@@ -1,6 +1,6 @@
 """
-AgentFlow Gradio Demo
-Runs AgentFlow on a user query using the deployed Modal endpoint or Together AI.
+AgentFlow Gradio Demo - Clean version without LoRA local option
+Runs AgentFlow on a user query using Together AI.
 
 Usage:
     pip install gradio
@@ -19,7 +19,6 @@ from agentflow.models.memory import Memory
 
 # ── Configuration ──────────────────────────────────────────
 DEFAULT_ENGINE = "together-Qwen/Qwen2.5-7B-Instruct-Turbo"
-DEFAULT_TOOLS = ["Base_Generator_Tool", "Google_Search_Tool", "Wikipedia_Search_Tool"]
 # ───────────────────────────────────────────────────────────
 
 _solver_cache = {}
@@ -34,10 +33,61 @@ def get_solver(engine: str, tools: list):
             output_types="direct",
             max_steps=8,
             max_time=120,
-            verbose=False,
+            verbose=True,
             temperature=0.0,
         )
     return _solver_cache[key]
+
+
+def extract_steps(solver, result):
+    """Try multiple ways to extract reasoning steps from the solver."""
+    steps_lines = []
+
+    # Method 1: result has a 'steps' key
+    steps = result.get("steps", [])
+    if steps:
+        for i, s in enumerate(steps):
+            tool = s.get("tool", s.get("action", "?"))
+            content = str(s.get("result", s.get("output", s.get("content", s))))[:500]
+            steps_lines.append(f"Step {i+1} [{tool}]\n{content}")
+        return "\n\n---\n\n".join(steps_lines)
+
+    # Method 2: result has 'trajectory' key
+    trajectory = result.get("trajectory", [])
+    if trajectory:
+        for i, t in enumerate(trajectory):
+            steps_lines.append(f"Step {i+1}\n{str(t)[:500]}")
+        return "\n\n---\n\n".join(steps_lines)
+
+    # Method 3: pull from solver.memory messages/history
+    memory = getattr(solver, 'memory', None)
+    if memory:
+        messages = (
+            getattr(memory, 'messages', None) or
+            getattr(memory, 'history', None) or
+            getattr(memory, 'turns', None) or
+            []
+        )
+        if messages:
+            for i, msg in enumerate(messages):
+                if isinstance(msg, dict):
+                    role = msg.get('role', '?')
+                    content = str(msg.get('content', ''))[:500]
+                else:
+                    role = "step"
+                    content = str(msg)[:500]
+                steps_lines.append(f"Step {i+1} [{role}]\n{content}")
+            return "\n\n---\n\n".join(steps_lines)
+
+    # Method 4: show raw result keys as debug
+    debug_info = []
+    for k, v in result.items():
+        if k not in ("direct_output", "final_output"):
+            debug_info.append(f"[{k}]: {str(v)[:300]}")
+    if debug_info:
+        return "Raw result fields:\n\n" + "\n\n".join(debug_info)
+
+    return "No intermediate steps recorded."
 
 
 def run_query(query: str, engine: str, use_google: bool, use_wikipedia: bool, use_sql: bool):
@@ -56,18 +106,19 @@ def run_query(query: str, engine: str, use_google: bool, use_wikipedia: bool, us
         solver = get_solver(engine, tools)
         solver.memory = Memory()
         result = solver.solve(query)
+
         answer = result.get("direct_output", result.get("final_output", "No answer found."))
-        steps = result.get("steps", [])
-        steps_text = "\n\n".join(
-            f"**Step {i+1} [{s.get('tool', '?')}]**\n{str(s.get('result', ''))[:300]}"
-            for i, s in enumerate(steps)
-        ) if steps else "No intermediate steps recorded."
+        steps_text = extract_steps(solver, result)
+
         return answer, steps_text
+
     except Exception as e:
-        return f"Error: {e}", ""
+        import traceback
+        tb = traceback.format_exc()
+        return f"Error: {e}", f"Traceback:\n{tb}"
 
 
-with gr.Blocks(title="AgentFlow Demo") as demo:
+with gr.Blocks(title="AgentFlow Demo", theme=gr.themes.Soft()) as demo:
     gr.Markdown("""
 # AgentFlow Demo
 Multi-agent question answering with a trainable Planner + tool-using Executor.
@@ -81,30 +132,30 @@ Built for Northeastern Self-Improving AI Systems (Spring 2026).
                 placeholder="e.g. Who directed the movie that won the Oscar for Best Picture in 2023?",
                 lines=3,
             )
-            with gr.Row():
-                engine_dropdown = gr.Dropdown(
-                    label="Planner Model",
-                    choices=[
-                        "together-Qwen/Qwen2.5-7B-Instruct-Turbo",
-                        "together-Qwen/Qwen3.5-9B",
-                    ],
-                    value="together-Qwen/Qwen2.5-7B-Instruct-Turbo",
-                )
+            engine_dropdown = gr.Dropdown(
+                label="Planner Model",
+                choices=[
+                    "together-Qwen/Qwen2.5-7B-Instruct-Turbo",
+                    "together-meta-llama/Llama-3.3-70B-Instruct-Turbo",
+                ],
+                value="together-Qwen/Qwen2.5-7B-Instruct-Turbo",
+            )
             with gr.Row():
                 use_google = gr.Checkbox(label="Google Search", value=True)
                 use_wiki = gr.Checkbox(label="Wikipedia", value=True)
                 use_sql = gr.Checkbox(label="SQL Executor", value=False)
-            run_btn = gr.Button("Run AgentFlow", variant="primary")
+            run_btn = gr.Button("Run AgentFlow", variant="primary", size="lg")
 
         with gr.Column(scale=3):
-            answer_box = gr.Textbox(label="Final Answer", lines=4)
-            steps_box = gr.Textbox(label="Reasoning Steps", lines=12)
+            answer_box = gr.Textbox(label="Final Answer", lines=6)
+            steps_box = gr.Textbox(label="Reasoning Steps", lines=14)
 
     gr.Examples(
         examples=[
             ["What is the capital of the country that hosted the 2022 FIFA World Cup?", "together-Qwen/Qwen2.5-7B-Instruct-Turbo", True, True, False],
             ["Which director has won more Oscars: Steven Spielberg or Martin Scorsese?", "together-Qwen/Qwen2.5-7B-Instruct-Turbo", True, True, False],
             ["How many singers are in the concert_singer database?", "together-Qwen/Qwen2.5-7B-Instruct-Turbo", False, False, True],
+            ["Who was the US president when the Berlin Wall fell?", "together-Qwen/Qwen2.5-7B-Instruct-Turbo", True, True, False],
         ],
         inputs=[query_box, engine_dropdown, use_google, use_wiki, use_sql],
     )
@@ -116,4 +167,4 @@ Built for Northeastern Self-Improving AI Systems (Spring 2026).
     )
 
 if __name__ == "__main__":
-    demo.launch(share=False)
+    demo.launch(share=False, show_error=True)

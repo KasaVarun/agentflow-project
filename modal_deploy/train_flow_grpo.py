@@ -20,8 +20,8 @@ Usage:
     modal run modal_deploy/train_flow_grpo.py
     modal run modal_deploy/train_flow_grpo.py --experiment-name flow_grpo_0.8b --max-steps 500
 
-Cost: A10G ~$1.10/hr. 500 steps * 8 trajs * ~10s/traj = ~11 hrs = ~$12.
-Add --benchmark text2sql to train for SQL task (Step 6).
+Cost: A100-80GB ~$4/hr. 50 steps * 8 trajs * ~5min/traj = ~4 hrs = ~$16.
+Add --benchmark sql to train for SQL task (Step 6).
 """
 import modal
 
@@ -32,9 +32,9 @@ BASE_MODEL = "Qwen/Qwen3.5-0.8B"
 FIXED_ENGINE = "Qwen/Qwen2.5-7B-Instruct-Turbo"
 TOGETHER_BASE_URL = "https://api.together.xyz/v1"
 
-GPU_CONFIG = "A10G"
+GPU_CONFIG = "A100-80GB"
 TRAINING_TIMEOUT = 72000    # 20 hours max
-CHECKPOINT_STEPS = 50
+CHECKPOINT_STEPS = 3        # Save every 3 steps to survive preemption
 MAX_STEPS = 500
 GROUP_SIZE = 8              # G: trajectories per query (paper uses 8)
 MAX_TURNS = 3               # Max planner turns per trajectory
@@ -49,7 +49,7 @@ LORA_DROPOUT = 0.05
 LEARNING_RATE = 1e-4
 CLIP_EPS = 0.2
 KL_COEF = 0.01
-MAX_COMPLETION_TOKENS = 512
+MAX_COMPLETION_TOKENS = 256
 # ============================================================
 
 app = modal.App("agentflow-train")
@@ -202,7 +202,7 @@ def _run_trajectory(query: str, model, tokenizer, together_client, device):
             f"<|im_start|>assistant\n"
         )
         inputs = tokenizer(
-            fmt, return_tensors="pt", truncation=True, max_length=2048
+            fmt, return_tensors="pt", truncation=True, max_length=512
         ).to(device)
         with torch.no_grad():
             out = model.generate(
@@ -295,13 +295,10 @@ def _run_trajectory(query: str, model, tokenizer, together_client, device):
 
 def _compute_flow_grpo_loss(model, ref_model, trajectories, rewards, device):
     """
-    Flow-GRPO loss (AgentFlow paper, Section 3.2):
-    1. Normalize rewards across G trajectories -> advantages
-    2. For each planner turn in each trajectory:
-       - Compute log-ratio π_θ / π_ref (importance weight)
-       - PPO-clipped objective scaled by advantage
-       - KL penalty
-    3. Average over all response tokens
+    Flow-GRPO loss (AgentFlow paper, Section 3.2).
+    Calls .backward() per turn to free each computation graph immediately,
+    preventing OOM from holding all G trajectory graphs simultaneously.
+    Returns scalar loss value (float) for logging — gradients already accumulated.
     """
     import torch
     import torch.nn.functional as F
@@ -311,7 +308,7 @@ def _compute_flow_grpo_loss(model, ref_model, trajectories, rewards, device):
     std_r = rewards_t.std().clamp(min=1e-8)
     advantages = (rewards_t - mean_r) / std_r  # [G]
 
-    total_loss = torch.zeros(1, device=device, requires_grad=False)
+    total_loss_val = 0.0
     n_tokens = 0
 
     for traj_idx, (_, planner_turns) in enumerate(trajectories):
@@ -321,27 +318,30 @@ def _compute_flow_grpo_loss(model, ref_model, trajectories, rewards, device):
             if len(response_ids) == 0:
                 continue
 
-            full_ids = torch.cat([prompt_ids, response_ids]).unsqueeze(0).to(device)
-            prompt_len = prompt_ids.shape[0]
-            resp_len = response_ids.shape[0]
+            full_ids = torch.cat([prompt_ids, response_ids])
+            full_ids = full_ids[-512:]  # truncate to last 512 tokens to prevent OOM
+            full_ids = full_ids.unsqueeze(0).to(device)
+            prompt_len = min(prompt_ids.shape[0], full_ids.shape[1] - response_ids.shape[0])
+            resp_len = full_ids.shape[1] - prompt_len
 
-            # Current model log-probs
-            with torch.enable_grad():
-                out = model(input_ids=full_ids, use_cache=False)
-            logits = out.logits[0, prompt_len - 1:prompt_len + resp_len - 1]  # [resp_len, vocab]
-            log_probs = F.log_softmax(logits, dim=-1)
-            resp_ids_dev = response_ids.to(device)
-            tok_log_probs = log_probs.gather(1, resp_ids_dev.unsqueeze(1)).squeeze(1)  # [resp_len]
-
-            # Reference model log-probs (frozen)
+            # Reference model log-probs first (no_grad, no graph retained)
             with torch.no_grad():
                 ref_out = ref_model(input_ids=full_ids, use_cache=False)
             ref_logits = ref_out.logits[0, prompt_len - 1:prompt_len + resp_len - 1]
-            ref_log_probs = F.log_softmax(ref_logits, dim=-1)
-            ref_tok_log_probs = ref_log_probs.gather(1, resp_ids_dev.unsqueeze(1)).squeeze(1)
+            ref_log_probs_val = F.log_softmax(ref_logits, dim=-1).detach()
+            resp_ids_dev = response_ids.to(device)
+            ref_tok_log_probs = ref_log_probs_val.gather(1, resp_ids_dev.unsqueeze(1)).squeeze(1)
+            del ref_out, ref_logits, ref_log_probs_val
+            torch.cuda.empty_cache()
+
+            # Current model log-probs (with grad, one turn at a time)
+            out = model(input_ids=full_ids, use_cache=False)
+            logits = out.logits[0, prompt_len - 1:prompt_len + resp_len - 1]
+            log_probs = F.log_softmax(logits, dim=-1)
+            tok_log_probs = log_probs.gather(1, resp_ids_dev.unsqueeze(1)).squeeze(1)
 
             # Log importance ratio
-            log_ratio = tok_log_probs - ref_tok_log_probs.detach()  # [resp_len]
+            log_ratio = tok_log_probs - ref_tok_log_probs
             ratio = log_ratio.exp()
 
             # PPO-clipped objective
@@ -349,17 +349,19 @@ def _compute_flow_grpo_loss(model, ref_model, trajectories, rewards, device):
             pg2 = ratio.clamp(1 - CLIP_EPS, 1 + CLIP_EPS) * adv
             pg_loss = -torch.min(pg1, pg2).mean()
 
-            # KL penalty (forward KL: π_θ log(π_θ/π_ref))
+            # KL penalty
             kl = (tok_log_probs.exp() * log_ratio).mean()
-            kl_loss = KL_COEF * kl
 
-            turn_loss = (pg_loss + kl_loss).unsqueeze(0)
-            total_loss = total_loss + turn_loss
+            turn_loss = pg_loss + KL_COEF * kl
+            # Backward immediately to free this turn's computation graph
+            turn_loss.backward()
+
+            total_loss_val += float(turn_loss.item())
             n_tokens += resp_len
+            del out, logits, log_probs, tok_log_probs, log_ratio, ratio, turn_loss
+            torch.cuda.empty_cache()
 
-    if n_tokens > 0:
-        total_loss = total_loss / n_tokens
-    return total_loss.squeeze()
+    return total_loss_val / max(n_tokens, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -381,12 +383,8 @@ def train(
     experiment_name: str = "flow_grpo_0.8b",
     max_steps: int = MAX_STEPS,
     resume_from_checkpoint: bool = True,
-    benchmark: str = "qa",  # "qa" or "sql"
+    benchmark: str = "qa",
 ):
-    """
-    Flow-GRPO training. Saves to Modal Volumes every CHECKPOINT_STEPS.
-    Set benchmark="sql" to train for Text-to-SQL (Step 6).
-    """
     import os
     import json
     import random
@@ -394,14 +392,14 @@ def train(
     from openai import OpenAI
     from transformers import AutoTokenizer, AutoModelForCausalLM
     from peft import LoraConfig, get_peft_model, TaskType, PeftModel
-    import copy
+
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device} | Model: {BASE_MODEL} | Benchmark: {benchmark}")
 
     together_api_key = os.environ.get("TOGETHER_API_KEY") or os.environ.get("TOGETHER_API_KEY_SECRET")
     if not together_api_key:
-        # Print all env vars with 'TOGETHER' to help debug secret key name
         keys = [k for k in os.environ if "TOGETHER" in k.upper()]
         raise ValueError(f"TOGETHER_API_KEY not found. Available TOGETHER* vars: {keys}")
     together_client = OpenAI(api_key=together_api_key, base_url=TOGETHER_BASE_URL)
@@ -411,12 +409,10 @@ def train(
     latest_ckpt = os.path.join(checkpoint_dir, "latest")
     meta_file = os.path.join(checkpoint_dir, "meta.json")
 
-    # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Load model (resume or fresh LoRA)
     start_step = 0
     if resume_from_checkpoint and os.path.exists(latest_ckpt):
         print(f"Resuming from: {latest_ckpt}")
@@ -440,7 +436,6 @@ def train(
         model = get_peft_model(base, lora_cfg).to(device)
         model.print_trainable_parameters()
 
-    # Frozen reference model (base weights only, no LoRA)
     print("Loading frozen reference model...")
     ref_model = AutoModelForCausalLM.from_pretrained(
         BASE_MODEL, torch_dtype=torch.bfloat16
@@ -455,13 +450,11 @@ def train(
         lr=LEARNING_RATE, weight_decay=0.01,
     )
 
-    # Training data
     print("Loading training data...")
     training_data = _load_training_data(benchmark=benchmark, max_samples=5000)
     random.shuffle(training_data)
     print(f"Total training samples: {len(training_data)}")
 
-    # Training loop
     log = []
     print(f"\nFlow-GRPO: steps {start_step} -> {max_steps}, G={GROUP_SIZE}\n")
 
@@ -470,7 +463,6 @@ def train(
         query = sample["query"]
         gold = sample["answer"]
 
-        # Sample G trajectories
         trajectories, rewards = [], []
         for g in range(GROUP_SIZE):
             try:
@@ -484,31 +476,44 @@ def train(
 
         mean_r = sum(rewards) / len(rewards)
 
-        # Skip step if all rewards identical (no learning signal)
         if len(set(rewards)) == 1:
             print(f"Step {step+1}/{max_steps} | skip (uniform rewards={rewards[0]})")
             log.append({"step": step + 1, "loss": None, "mean_reward": mean_r, "skipped": True})
+            # Save checkpoint on skipped steps too to track progress
+            if (step + 1) % CHECKPOINT_STEPS == 0:
+                with open(meta_file, "w") as f:
+                    json.dump({"step": step + 1, "model": BASE_MODEL, "benchmark": benchmark}, f)
+                checkpoints_volume.commit()
             continue
 
-        # Flow-GRPO update
         optimizer.zero_grad()
-        loss = _compute_flow_grpo_loss(model, ref_model, trajectories, rewards, device)
-        loss.backward()
+        loss_val = _compute_flow_grpo_loss(model, ref_model, trajectories, rewards, device)
         torch.nn.utils.clip_grad_norm_(
             [p for p in model.parameters() if p.requires_grad], max_norm=0.5
         )
         optimizer.step()
-
-        loss_val = float(loss.item())
         log.append({"step": step + 1, "loss": loss_val, "mean_reward": mean_r, "rewards": rewards})
         print(f"Step {step+1}/{max_steps} | loss={loss_val:.4f} | reward={mean_r:.2f} | {rewards}")
 
-        # Checkpoint
         if (step + 1) % CHECKPOINT_STEPS == 0 or (step + 1) == max_steps:
             print(f"  Saving checkpoint @ step {step+1}...")
-            model.save_pretrained(latest_ckpt)
+            model.save_pretrained(latest_ckpt, safe_serialization=True)
             tokenizer.save_pretrained(latest_ckpt)
-            model.save_pretrained(os.path.join(checkpoint_dir, f"step_{step+1}"))
+            model.save_pretrained(
+                os.path.join(checkpoint_dir, f"step_{step+1}"),
+                safe_serialization=True,
+            )
+
+            # Verify files actually landed in the volume before committing
+            adapter_path = os.path.join(latest_ckpt, "adapter_model.safetensors")
+            if not os.path.exists(adapter_path):
+                raise RuntimeError(
+                    f"Checkpoint save failed — adapter_model.safetensors not found at {latest_ckpt}. "
+                    f"Contents: {os.listdir(latest_ckpt) if os.path.isdir(latest_ckpt) else 'directory missing'}"
+                )
+            size_mb = os.path.getsize(adapter_path) / (1024 * 1024)
+            print(f"  Verified adapter_model.safetensors: {size_mb:.1f} MB")
+
             with open(meta_file, "w") as f:
                 json.dump({"step": step + 1, "model": BASE_MODEL, "benchmark": benchmark}, f)
             with open(f"/results/{experiment_name}_log.json", "w") as f:
@@ -539,14 +544,11 @@ def main(
     """
     Launch Flow-GRPO training on Modal.
 
-    Steps 5 (paper benchmarks):
-        modal run modal_deploy/train_flow_grpo.py
+    Step 5 (paper benchmarks):
+        modal run modal_deploy/train_flow_grpo.py --experiment-name flow_grpo_qwen35_0.8b_final --max-steps 50
 
     Step 6 (Text-to-SQL):
-        modal run modal_deploy/train_flow_grpo.py --benchmark sql --experiment-name flow_grpo_sql_0.8b
-
-    Prerequisites:
-        modal secret create together-api-key TOGETHER_API_KEY=<your-key>
+        modal run modal_deploy/train_flow_grpo.py --benchmark sql --experiment-name flow_grpo_sql_qwen35_0.8b_final --max-steps 50
     """
     print("=" * 60)
     print("Flow-GRPO Training")
@@ -560,10 +562,9 @@ def main(
     print(f"Resume:      {resume}")
     print()
 
-    # Cost estimate
     hrs = max_steps * GROUP_SIZE * MAX_TURNS * 10 / 3600
-    cost = hrs * 1.10
-    print(f"Cost estimate: ~{hrs:.1f} GPU-hrs @ $1.10/hr = ~${cost:.0f}")
+    cost = hrs * 4.0  # A100-80GB ~$4/hr
+    print(f"Cost estimate: ~{hrs:.1f} GPU-hrs @ $4/hr = ~${cost:.0f}")
     print()
 
     result = train.remote(

@@ -49,6 +49,18 @@ def create_llm_engine(model_string: str, use_cache: bool = False, is_multimodal:
         }
         return ChatVLLM(**config)
 
+    # === Local LoRA (HuggingFace + PEFT) ===
+    elif model_string == "local-LoRA-Qwen2.5-0.5B-GRPO":
+        from .local_lora import LocalLoRAEngine
+
+        return LocalLoRAEngine(
+            base_model="Qwen/Qwen2.5-0.5B-Instruct",
+            lora_path=os.environ.get(
+                "AGENTFLOW_LORA_CHECKPOINT",
+                "checkpoints/flow_grpo_0.5b_step300",
+            ),
+        )
+
     else:
         raise ValueError(
             f"Engine '{original_model_string}' not supported. "
