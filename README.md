@@ -1,6 +1,5 @@
 # AgentFlow: Self-Improving AI via Flow-GRPO
 
-Northeastern University — Self-Improving AI Systems (Final Project, April 2026)
 
 Reimplementation of [AgentFlow](https://arxiv.org/abs/2501.12599) (Huang et al., 2025): a multi-agent framework that trains a planner LLM to orchestrate tools using Flow-GRPO, a multi-turn extension of Group Relative Policy Optimization.
 
